@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta 
 
 class BankDB:
-    def __init__(self, db_name="bank.db"):
+    def __init__(self, db_name="bank_v2.db"): 
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.create_tables()
@@ -393,3 +393,4 @@ elif choice == "Logout":
     st.session_state.current_user_acc = None
     st.session_state.is_admin = False
     st.rerun()
+

@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta 
 
 class BankDB:
-    def __init__(self, db_name="bank_v2.db"): 
+    def __init__(self, db_name="bank_v3.db"): 
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.create_tables()
@@ -180,7 +180,7 @@ if choice == "Login":
         st.write("Enter your registered email and Date of Birth to recover your details.")
         with st.form("recover_form", clear_on_submit=True):
             rec_email = st.text_input("Registered Email")
-            rec_dob = st.date_input("Date of Birth")
+            rec_dob = st.date_input("Date of Birth", min_value=datetime(1900, 1, 1).date(), max_value=datetime.today().date())
             rec_submit = st.form_submit_button("Recover Details")
             
             if rec_submit:
@@ -393,4 +393,5 @@ elif choice == "Logout":
     st.session_state.current_user_acc = None
     st.session_state.is_admin = False
     st.rerun()
+
 

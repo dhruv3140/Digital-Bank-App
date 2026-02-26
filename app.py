@@ -1,40 +1,20 @@
 import streamlit as st
-import sqlite3
 import random
 import string
 import pandas as pd  
 from datetime import datetime, timezone, timedelta 
+from supabase import create_client, Client
 
+@st.cache_resource
+def init_connection():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+supabase: Client = init_connection()
+
+# --- DATABASE LOGIC (Supabase Version) ---
 class BankDB:
-    def __init__(self, db_name="bank_v3.db"): 
-        self.conn = sqlite3.connect(db_name, check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        self.create_tables()
-
-    def create_tables(self):
-        # Accounts table mein 'dob' column add kiya gaya hai
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS accounts (
-                account_no TEXT PRIMARY KEY,
-                name TEXT,
-                age INTEGER,
-                dob TEXT,
-                email TEXT,
-                pin TEXT,
-                balance INTEGER
-            )
-        ''')
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_no TEXT,
-                type TEXT,
-                amount INTEGER,
-                timestamp TEXT
-            )
-        ''')
-        self.conn.commit()
-
     def generate_account_no(self):
         alpha = random.choices(string.ascii_letters, k=3)
         num = random.choices(string.digits, k=3)
@@ -45,89 +25,85 @@ class BankDB:
 
     def create_account(self, name, age, dob, email, pin):
         acc_no = self.generate_account_no()
-        try:
-            self.cursor.execute('''
-                INSERT INTO accounts (account_no, name, age, dob, email, pin, balance)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (acc_no, name, age, str(dob), email, str(pin), 0))
-            self.conn.commit()
-            return acc_no
-        except sqlite3.IntegrityError:
-            return self.create_account(name, age, dob, email, pin)
+        data = {
+            "account_no": acc_no,
+            "name": name,
+            "age": age,
+            "dob": str(dob),
+            "email": email,
+            "pin": str(pin),
+            "balance": 0
+        }
+        response = supabase.table("accounts").insert(data).execute()
+        return acc_no
 
     def authenticate_user(self, acc_num, pin):
-        self.cursor.execute('SELECT account_no FROM accounts WHERE account_no = ? AND pin = ?', (acc_num, str(pin)))
-        return self.cursor.fetchone() is not None
+        response = supabase.table("accounts").select("account_no").eq("account_no", acc_num).eq("pin", str(pin)).execute()
+        return len(response.data) > 0
     
     def recover_details(self, email, dob):
-        self.cursor.execute('SELECT account_no, pin FROM accounts WHERE email = ? AND dob = ?', (email.strip(), str(dob).strip()))
-        return self.cursor.fetchone() # Yeh dono cheezein return karega (Account No, PIN)      
+        response = supabase.table("accounts").select("account_no, pin").eq("email", email.strip()).eq("dob", str(dob).strip()).execute()
+        if response.data:
+            return response.data[0]['account_no'], response.data[0]['pin']
+        return None       
 
     def get_user(self, acc_num):
-        self.cursor.execute('SELECT * FROM accounts WHERE account_no = ?', (acc_num,))
-        row = self.cursor.fetchone()
-        if row:
+        response = supabase.table("accounts").select("*").eq("account_no", acc_num).execute()
+        if response.data:
+            user_data = response.data[0]
             return {
-                "accountNo.": row[0],
-                "name": row[1],
-                "age": row[2],
-                "dob": row[3],
-                "email": row[4],
-                "pin": row[5],
-                "balance": row[6]
+                "accountNo.": user_data['account_no'],
+                "name": user_data['name'],
+                "age": user_data['age'],
+                "dob": user_data['dob'],
+                "email": user_data['email'],
+                "pin": user_data['pin'],
+                "balance": user_data['balance']
             }
         return None
 
     def update_balance(self, acc_num, new_balance):
-        self.cursor.execute('UPDATE accounts SET balance = ? WHERE account_no = ?', (new_balance, acc_num))
-        self.conn.commit()
+        supabase.table("accounts").update({"balance": new_balance}).eq("account_no", acc_num).execute()
 
     def log_transaction(self, acc_num, trans_type, amount):
-        # INDIA TIMEZONE LOGIC (IST = UTC + 5:30)
         ist_offset = timedelta(hours=5, minutes=30)
         ist_tz = timezone(ist_offset)
         now = datetime.now(ist_tz).strftime("%Y-%m-%d %H:%M:%S")
         
-        self.cursor.execute('''
-            INSERT INTO transactions (account_no, type, amount, timestamp)
-            VALUES (?, ?, ?, ?)
-        ''', (acc_num, trans_type, amount, now))
-        self.conn.commit()
+        data = {
+            "account_no": acc_num,
+            "type": trans_type,
+            "amount": amount,
+            "timestamp": now
+        }
+        supabase.table("transactions").insert(data).execute()
 
     def get_transaction_history(self, acc_num):
-        self.cursor.execute('''
-            SELECT timestamp, type, amount FROM transactions 
-            WHERE account_no = ? ORDER BY timestamp DESC
-        ''', (acc_num,))
-        return self.cursor.fetchall()
+        response = supabase.table("transactions").select("timestamp, type, amount").eq("account_no", acc_num).order("timestamp", desc=True).execute()
+        return response.data
 
     def update_details(self, acc_num, name, email, pin):
-        self.cursor.execute('UPDATE accounts SET name = ?, email = ?, pin = ? WHERE account_no = ?', 
-                            (name, email, str(pin), acc_num))
-        self.conn.commit()
+        supabase.table("accounts").update({"name": name, "email": email, "pin": str(pin)}).eq("account_no", acc_num).execute()
 
     def change_pin(self, acc_num, new_pin):
-        self.cursor.execute('UPDATE accounts SET pin = ? WHERE account_no = ?', (str(new_pin), acc_num))
-        self.conn.commit()
+        supabase.table("accounts").update({"pin": str(new_pin)}).eq("account_no", acc_num).execute()
 
     def delete_account(self, acc_num):
-        self.cursor.execute('DELETE FROM accounts WHERE account_no = ?', (acc_num,))
-        self.cursor.execute('DELETE FROM transactions WHERE account_no = ?', (acc_num,)) 
-        self.conn.commit()
+        supabase.table("transactions").delete().eq("account_no", acc_num).execute()
+        supabase.table("accounts").delete().eq("account_no", acc_num).execute()
         
     def get_all_accounts(self):
-        self.cursor.execute('SELECT account_no, name, age, dob, email, pin, balance FROM accounts')
-        return self.cursor.fetchall()
+        response = supabase.table("accounts").select("account_no, name, age, dob, email, pin, balance").execute()
+        return response.data
 
     def get_all_transactions(self):
-        self.cursor.execute('SELECT id, account_no, type, amount, timestamp FROM transactions ORDER BY timestamp DESC')
-        return self.cursor.fetchall()
+        response = supabase.table("transactions").select("id, account_no, type, amount, timestamp").order("timestamp", desc=True).execute()
+        return response.data
 
 
-
+# --- STREAMLIT UI ---
 st.set_page_config(page_title="Smart AI Bank", layout="centered")
 st.title("🏦 Smart AI Bank Management System")
-
 
 if 'bank' not in st.session_state:
     st.session_state.bank = BankDB()
@@ -149,7 +125,6 @@ else:
 
 choice = st.sidebar.selectbox("Select Action", menu)
 st.write("---")
-
 
 if choice == "Login":
     st.header("🔐 Login to Your Account")
@@ -175,7 +150,7 @@ if choice == "Login":
                 st.error("Invalid Account Number or PIN.")
 
     st.write("---")
-   
+    
     with st.expander("Forgot your Account Number or PIN?"):
         st.write("Enter your registered email and Date of Birth to recover your details.")
         with st.form("recover_form", clear_on_submit=True):
@@ -189,7 +164,6 @@ if choice == "Login":
                 else:
                     recovered_data = bank.recover_details(rec_email, rec_dob)
                     if recovered_data:
-                        # recovered_data[0] is Account No, recovered_data[1] is PIN
                         st.success(f"**Account Number:** {recovered_data[0]}")
                         st.success(f"**PIN:** {recovered_data[1]}")
                         st.info("👆 Please note down your details and login above.")
@@ -198,54 +172,63 @@ if choice == "Login":
 
 elif choice == "Create Account":
     st.header("📝 Open a New Account")
-    with st.form("create_form", clear_on_submit=True):
+    # clear_on_submit=False kiya hai taaki error screen par ruke
+    with st.form("create_form", clear_on_submit=False):
         name = st.text_input("Full Name")
-        # AGE KA INPUT HATA DIYA HAI, SIRF DOB LI JAYEGI
         dob = st.date_input("Date of Birth", min_value=datetime(1900, 1, 1).date(), max_value=datetime.today().date())
         email = st.text_input("Email")
         pin = st.text_input("4-Digit PIN", type="password")
         submitted = st.form_submit_button("Register")
 
         if submitted:
-            # --- AUTO AGE CALCULATION LOGIC ---
+            
             today = datetime.today().date()
-            # Aaj ke saal mein se DOB ka saal minus karega, aur mahine/din check karega
             calculated_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
             
             if not name or not email:
                 st.error("Name and Email cannot be empty.")
             elif calculated_age < 18:
-                # Ab error mein user ko uski exact age bhi dikhegi
                 st.error(f"Your calculated age is {calculated_age} years. You must be at least 18 years old to open an account.")
             elif len(pin) != 4 or not pin.isdigit():
                 st.error("PIN must be exactly 4 numeric digits.")
             else:
-                # calculated_age ko database mein bhej rahe hain
-                acc_no = bank.create_account(name, calculated_age, dob, email, pin)
-                st.success(f"Account created successfully! Your Account Number is: **{acc_no}**")
-                st.info("Please save this number and go to the Login tab.")
+                
+                try:
+                    acc_no = bank.create_account(name, calculated_age, dob, email, pin)
+                    st.success(f"✅ Step 3: Account created successfully! Your Account Number is: **{acc_no}**")
+                except Exception as e:
+                    st.error(f"❌ Step 3 (ERROR): Supabase Connection Failed -> {e}")
 
 elif choice == "👑 Admin Dashboard":
     st.header("👑 Admin Database Viewer")
-    st.write("Here you can see all the data stored in the bank's database.")
+    st.write("Here you can see all the data stored securely on Supabase Cloud.")
     
     st.subheader("👥 All Bank Accounts")
-    accounts = bank.get_all_accounts()
-    if accounts:
-        df_acc = pd.DataFrame(accounts, columns=["Account No", "Name", "Age", "DOB", "Email", "PIN", "Balance (₹)"])
-        st.dataframe(df_acc, use_container_width=True, hide_index=True)
-    else:
-        st.info("No accounts in the database yet.")
+    try:
+        accounts = bank.get_all_accounts()
+        if accounts:
+            df_acc = pd.DataFrame(accounts)
+            df_acc = df_acc[["account_no", "name", "age", "dob", "email", "pin", "balance"]]
+            df_acc.columns = ["Account No", "Name", "Age", "DOB", "Email", "PIN", "Balance (₹)"]
+            st.dataframe(df_acc, use_container_width=True, hide_index=True)
+        else:
+            st.info("No accounts in the database yet.")
+    except Exception as e:
+        st.error(f"Database Error: {e}")
         
     st.write("---")
     st.subheader("📜 All Transactions")
-    transactions = bank.get_all_transactions()
-    if transactions:
-        df_trans = pd.DataFrame(transactions, columns=["ID", "Account No", "Type", "Amount (₹)", "Date & Time"])
-        st.dataframe(df_trans, use_container_width=True, hide_index=True)
-    else:
-        st.info("No transactions recorded yet.")
-
+    try:
+        transactions = bank.get_all_transactions()
+        if transactions:
+            df_trans = pd.DataFrame(transactions)
+            df_trans = df_trans[["id", "account_no", "type", "amount", "timestamp"]]
+            df_trans.columns = ["ID", "Account No", "Type", "Amount (₹)", "Date & Time"]
+            st.dataframe(df_trans, use_container_width=True, hide_index=True)
+        else:
+            st.info("No transactions recorded yet.")
+    except Exception as e:
+        st.error(f"Database Error: {e}")
 
 elif choice == "Dashboard (Details)":
     st.header("📊 Account Dashboard")
@@ -261,11 +244,12 @@ elif choice == "Dashboard (Details)":
     st.subheader("📜 Transaction History")
     history = bank.get_transaction_history(st.session_state.current_user_acc)
     if history:
-        df = pd.DataFrame(history, columns=["Date & Time", "Type", "Amount (₹)"])
+        df = pd.DataFrame(history)
+        df = df[["timestamp", "type", "amount"]]
+        df.columns = ["Date & Time", "Type", "Amount (₹)"]
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         st.info("No transactions yet. Deposit some money to see history!")
-
 
 elif choice == "🤖 AI Financial Advisor":
     st.header("🤖 Your Personal AI Financial Advisor")
@@ -291,10 +275,9 @@ elif choice == "🤖 AI Financial Advisor":
                 st.success("Analysis Complete! Here is your personalized advice:")
                 st.info(response.text)
             except KeyError:
-                st.error("API Key not found! Please check your .streamlit/secrets.toml file.")
+                st.error("API Key not found! Please check your secrets.")
             except Exception as e:
                 st.error(f"Oops! Something went wrong. Error details: {e}")
-
 
 elif choice == "Deposit Money":
     st.header("💵 Deposit Funds")
@@ -308,7 +291,6 @@ elif choice == "Deposit Money":
             bank.log_transaction(user['accountNo.'], "Deposit", amount) 
             st.success(f"Successfully deposited ₹{amount}. New balance: ₹{new_balance}")
             st.rerun()
-
 
 elif choice == "Withdraw Money":
     st.header("🏧 Withdraw Funds")
@@ -325,7 +307,6 @@ elif choice == "Withdraw Money":
                 st.rerun()
             else:
                 st.error("Insufficient funds.")
-
 
 elif choice == "Update Details":
     st.header("⚙️ Update Information")
@@ -346,7 +327,6 @@ elif choice == "Update Details":
 elif choice == "Change PIN":
     st.header("🔑 Change Your PIN")
     user = bank.get_user(st.session_state.current_user_acc)
-    
     with st.form("change_pin_form", clear_on_submit=True):
         old_pin = st.text_input("Enter Old PIN", type="password")
         new_pin = st.text_input("Enter New 4-Digit PIN", type="password")
@@ -354,23 +334,17 @@ elif choice == "Change PIN":
         submitted = st.form_submit_button("Update PIN")
         
         if submitted:
-            # 1. Check if old PIN is correct
             if not bank.authenticate_user(user['accountNo.'], old_pin.strip()):
                 st.error("Incorrect Old PIN. Please try again.")
-            # 2. Check if new PIN is 4 digits
             elif len(new_pin.strip()) != 4 or not new_pin.strip().isdigit():
                 st.error("New PIN must be exactly 4 numeric digits.")
-            # 3. Check if both new PINs match
             elif new_pin.strip() != confirm_pin.strip():
                 st.error("New PIN and Confirm PIN do not match.")
-            # 4. Check if new PIN is same as old PIN
             elif old_pin.strip() == new_pin.strip():
                 st.warning("New PIN cannot be the same as the Old PIN.")
-            # 5. Success - Update the PIN
             else:
                 bank.change_pin(user['accountNo.'], new_pin.strip())
                 st.success("PIN changed successfully! Please remember your new PIN.")
-
 
 elif choice == "Delete Account":
     st.header("🗑️ Close Account")
@@ -387,11 +361,8 @@ elif choice == "Delete Account":
             else:
                 st.error("Please check the confirmation box.")
 
-
 elif choice == "Logout":
     st.session_state.logged_in = False
     st.session_state.current_user_acc = None
     st.session_state.is_admin = False
     st.rerun()
-
-

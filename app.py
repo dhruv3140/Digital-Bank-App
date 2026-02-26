@@ -195,7 +195,7 @@ elif choice == "Create Account":
                 
                 try:
                     acc_no = bank.create_account(name, calculated_age, dob, email, pin)
-                    st.success(f"✅ Step 3: Account created successfully! Your Account Number is: **{acc_no}**")
+                    st.success(f" Account created successfully! Your Account Number is: **{acc_no}**")
                 except Exception as e:
                     st.error(f"❌ Step 3 (ERROR): Supabase Connection Failed -> {e}")
 
@@ -366,3 +366,4 @@ elif choice == "Logout":
     st.session_state.current_user_acc = None
     st.session_state.is_admin = False
     st.rerun()
+
